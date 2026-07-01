@@ -18,10 +18,100 @@ Los comandos usan `docker compose`, que es la sintaxis moderna integrada a Docke
 
 ## Prerrequisitos
 
-- Git.
-- Node.js 18+ si se ejecutan servicios o pruebas fuera de Docker.
-- Docker Desktop en ejecución.
-- Cliente SQL: DBeaver, pgAdmin o `psql`.
+Antes de levantar el proyecto, instalar y verificar estas herramientas base. No avance a Docker Compose si alguna verificación falla: primero corrija la instalación, porque después los errores serán más difíciles de diagnosticar.
+
+| Herramienta | Para qué se usa en este proyecto | Instalación recomendada | Verificación mínima |
+| --- | --- | --- | --- |
+| Git | Clonar el repositorio y revisar cambios locales. | Instalar desde <https://git-scm.com/downloads> o mediante el gestor del sistema operativo. | `git --version` |
+| Docker Desktop | Ejecutar microservicios, PostgreSQL, RabbitMQ, Toxiproxy, Prometheus y Grafana. | Instalar desde <https://www.docker.com/products/docker-desktop/> y abrir la aplicación antes de ejecutar comandos. | `docker --version` y `docker compose version` |
+| Node.js 18+ | Ejecutar servicios, clientes o pruebas fuera de Docker cuando sea necesario. | Instalar Node.js LTS desde <https://nodejs.org/>. Si ya usa `nvm`, instalar una versión LTS compatible. | `node --version` y `npm --version` |
+| Cliente SQL | Crear tablas, insertar datos seed y revisar registros en PostgreSQL. | Usar DBeaver, pgAdmin o el cliente de línea de comandos `psql`. | Conectarse a `localhost:5432`, `localhost:5433` o `localhost:5434` después de levantar Docker Compose. |
+| Cliente HTTP | Probar endpoints y repetir solicitudes con headers específicos. | Usar Postman, Insomnia, Thunder Client, REST Client de VS Code o `curl`. | Poder enviar una solicitud HTTP local a un puerto expuesto. |
+| Navegador web moderno | Abrir cliente simulado, dashboard, RabbitMQ Management, Prometheus y Grafana. | Usar Chrome, Edge, Firefox o equivalente actualizado. | Abrir `http://localhost:8080` después del arranque. |
+| Terminal | Ejecutar comandos desde la raíz del repositorio. | macOS/Linux: terminal del sistema. Windows: PowerShell, Windows Terminal o Git Bash. | Ubicarse en la carpeta raíz y ejecutar `pwd` o `cd`. |
+
+### Pautas de instalación por herramienta
+
+#### 1. Git
+
+1. Instalar Git.
+2. Cerrar y volver a abrir la terminal.
+3. Verificar:
+
+   ```bash
+   git --version
+   ```
+
+4. Clonar o actualizar el repositorio según las indicaciones del curso.
+
+#### 2. Docker Desktop y Docker Compose
+
+1. Instalar Docker Desktop.
+2. Abrir Docker Desktop y esperar a que indique estado listo.
+3. Verificar desde una terminal:
+
+   ```bash
+   docker --version
+   docker compose version
+   ```
+
+4. Si `docker compose` no existe pero `docker-compose` sí, use `docker-compose` como fallback en los comandos de esta guía.
+5. En Windows, mantener Docker Desktop usando backend WSL 2 cuando esté disponible. Evite mezclar rutas de Windows y Linux dentro del mismo comando.
+
+#### 3. Node.js y npm
+
+El camino principal del curso usa Docker Compose, pero Node.js permite ejecutar servicios, clientes o pruebas de forma individual cuando el docente lo solicite.
+
+1. Instalar Node.js LTS 18 o superior.
+2. Verificar:
+
+   ```bash
+   node --version
+   npm --version
+   ```
+
+3. Si se ejecuta un servicio fuera de Docker, entrar a la carpeta del servicio y ejecutar `npm install` antes de iniciar scripts locales.
+4. No ejecutar `npm install` desde la raíz esperando instalar todo el monorepo: cada microservicio o cliente mantiene su propio `package.json`.
+
+#### 4. Cliente SQL
+
+El proyecto crea tres bases PostgreSQL separadas para sostener la arquitectura por servicios. Necesita un cliente SQL para ejecutar los scripts seed de esta guía.
+
+Opciones válidas:
+
+- DBeaver o pgAdmin si prefiere interfaz gráfica.
+- `psql` si prefiere terminal.
+
+Después de levantar Docker Compose, deberá poder conectarse a:
+
+| Base de datos | Host | Puerto local | Usuario |
+| --- | --- | ---: | --- |
+| `db_usuarios` | `localhost` | `5432` | `user_usuarios` |
+| `db_agenda` | `localhost` | `5433` | `user_agenda` |
+| `db_tutorias` | `localhost` | `5434` | `user_tutorias` |
+
+Las contraseñas y nombres completos de base aparecen en la sección [Inicializar bases de datos](#inicializar-bases-de-datos).
+
+#### 5. Cliente HTTP y navegador
+
+Para la prueba integrada basta con el cliente web local, pero un cliente HTTP externo ayuda a repetir casos, agregar headers y capturar evidencia.
+
+Instale o tenga disponible al menos una opción:
+
+- Postman, Insomnia, Thunder Client o REST Client de VS Code.
+- `curl` desde terminal.
+
+También use un navegador actualizado para acceder a las interfaces web locales.
+
+### Checklist antes de continuar
+
+- [ ] `git --version` responde correctamente.
+- [ ] Docker Desktop está abierto y listo.
+- [ ] `docker compose version` o `docker-compose --version` responde correctamente.
+- [ ] `node --version` muestra una versión 18 o superior si se trabajará fuera de Docker.
+- [ ] Tiene instalado un cliente SQL o sabe usar `psql`.
+- [ ] Tiene un cliente HTTP o puede usar `curl`.
+- [ ] Está ubicado en la raíz del repositorio antes de ejecutar los comandos siguientes.
 
 ## Configurar variables de entorno
 
