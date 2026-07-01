@@ -1,305 +1,158 @@
-# Tutorias Universitarias 2
-Proyecto académico diseñado para construir y demostrar una arquitectura de microservicios robusta, resiliente y moderna para un sistema de gestión de tutorías universitarias.
+# Tutorías Universitarias 2
 
-## ¿Qué Hace? (Funcionalidad Principal)
-El sistema simula el flujo completo de un estudiante que solicita una tutoría:
-1.  **Autenticación:** Un cliente (simulador) solicita un token JWT al servicio `ms-auth` proveyendo credenciales.
-2.  **Autorización:** El token JWT se utiliza para validar la identidad y el rol (ej. "estudiante") del usuario en rutas protegidas.
-3.  **Orquestación de Saga (en `ms-tutorias`):**
-    * Valida la existencia del estudiante y el tutor (`ms-usuarios`).
-    * Verifica la disponibilidad de horario (`ms-agenda`).
-    * Crea la tutoría en la base de datos con estado `PENDIENTE`.
-    * Bloquea el horario en la agenda del tutor (`ms-agenda`).
-    * Publica un evento asíncrono en RabbitMQ para notificar al usuario.
-    * Actualiza la tutoría a estado `CONFIRMADA`.
-4.  **Notificación (Consumidor):**
-    * `ms-notificaciones` consume el mensaje de la cola de RabbitMQ y (simula) el envío de un email de confirmación.
+Caso académico de microservicios para modelar, ejecutar y analizar un sistema de solicitud de tutorías universitarias. El proyecto permite estudiar diseño de servicios, arquitectura distribuida, integración, resiliencia, observabilidad y operación local con evidencia técnica reproducible.
 
-## Arquitectura del Sistema Local
+## Qué problema modela
 
-El ecosistema se levanta usando `docker-compose` y consiste en **11 contenedores** que representan **7 servicios de aplicación** y **4 servicios de infraestructura**:
+El caso representa el flujo donde un estudiante solicita una tutoría con un tutor disponible. La solución debe autenticar al usuario, validar participantes, verificar disponibilidad, bloquear agenda, registrar la tutoría, emitir eventos de notificación y dejar trazabilidad operativa del proceso.
 
-### Servicios de Aplicación
-* **`client-sim` (UI 1):** Un cliente web interactivo (Node.js + Express) para simular las solicitudes del estudiante.
-* **`tracking-dashboard` (UI 2):** Un dashboard de trazabilidad en vivo (Node.js + Express + WebSockets) que muestra la saga en tiempo real.
-* **`ms-auth`:** Microservicio de autenticación. Genera tokens JWT para los usuarios.
-* **`ms-usuarios`:** Microservicio que gestiona la información de estudiantes y tutores.
-* **`ms-agenda`:** Microservicio que gestiona la disponibilidad y los bloqueos de horario de los tutores.
-* **`ms-tutorias` (Orquestador):** El servicio central que maneja la lógica de negocio (Saga) para crear una tutoría.
-* **`ms-notificaciones` (Consumidor):** Un *worker* que escucha eventos de RabbitMQ para (simular) el envío de emails de confirmación.
+El problema es útil porque concentra retos comunes de arquitectura orientada a servicios:
 
-### Servicios de Infraestructura
-* **`db-usuarios`:** Base de datos PostgreSQL dedicada para `ms-usuarios`.
-* **`db-agenda`:** Base de datos PostgreSQL dedicada para `ms-agenda`.
-* **`db-tutorias`:** Base de datos PostgreSQL dedicada para `ms-tutorias`.
-* **`rabbitmq`:** Bróker de mensajería para la comunicación asíncrona.
+- separación de responsabilidades por servicio;
+- comunicación HTTP síncrona entre dominios;
+- comunicación asíncrona con RabbitMQ;
+- consistencia eventual y compensación de Saga;
+- manejo de fallas, timeouts, Circuit Breaker y DLQ;
+- trazabilidad mediante `X-Correlation-ID`, dashboard y métricas.
 
-## Stack Tecnológico Principal
+## Para qué sirve como caso de estudio
 
-* **Backend:** Node.js, Express.js
-* **Bases de Datos:** PostgreSQL (con cliente `pg` de Node.js)
-* **Mensajería:** RabbitMQ (con `amqplib`)
-* **Observabilidad:** WebSockets (`socket.io`)
-* **Contenerización:** Docker, Docker Compose
-* **Seguridad:** JWT (JSON Web Tokens)
+Este repositorio sirve para formación y práctica en diseño, arquitectura de software y arquitectura orientada a servicios. Permite explicar y demostrar cómo una solución distribuida evoluciona desde servicios HTTP básicos hacia un ecosistema con contratos, eventos, resiliencia, observabilidad, gobierno técnico y preparación de despliegue.
 
----
+## Capacidades desarrolladas
 
-## Guía de Puesta en Marcha Local (Obligatoria)
-Sigue estos pasos en orden para levantar el ecosistema completo en tu máquina.
+| Capacidad | Estado | Evidencia principal |
+| --- | --- | --- |
+| Servicios HTTP separados por responsabilidad | Implementado | `ms-auth`, `ms-usuarios`, `ms-agenda`, `ms-tutorias`, `ms-notificaciones` |
+| Flujo integrado de solicitud de tutoría | Implementado | `client-mobile-sim`, `ms-tutorias`, `ms-usuarios`, `ms-agenda` |
+| Autenticación con JWT | Implementado | `ms-auth`, rutas protegidas de `ms-tutorias` |
+| Consumo entre servicios y manejo de errores | Implementado/parcial | Clientes HTTP en `ms-tutorias/src/infrastructure/clients/` |
+| OpenAPI mínimo por servicio | Documentado | `ms-*/docs/swagger.yaml` |
+| Catálogo de servicios | Documentado | [`docs/service-catalog.md`](./docs/service-catalog.md) |
+| RabbitMQ para notificaciones y tracking | Implementado/parcial | `ms-notificaciones`, productores de eventos, `tracking-dashboard` |
+| Dead Letter Queue de notificaciones | Implementado con validación documentada | [`docs/event-contracts.md`](./docs/event-contracts.md), [`docs/pc03.md`](./docs/pc03.md) |
+| Consistencia de agenda con conflicto `409` | Implementado | `ms-agenda`, [`docs/pc03.md`](./docs/pc03.md) |
+| Circuit Breaker, timeout y Toxiproxy | Implementado con validación documentada | `toxiproxy.json`, `docker-compose.yml`, [`docs/observability-runbook.md`](./docs/observability-runbook.md) |
+| Saga compensation con fault injection seguro | Implementado con demo documentada | `ms-tutorias`, [`docs/bpm-tutoria-process.md`](./docs/bpm-tutoria-process.md), [`docs/pc03.md`](./docs/pc03.md) |
+| Tracking dashboard y correlation ID | Implementado/parcial | `tracking-dashboard`, eventos de tracking |
+| Prometheus/Grafana | Parcial | `prometheus.yml`, servicios en Docker Compose |
+| Docker Compose para entorno local | Implementado | `docker-compose.yml` |
 
-### 1. Prerrequisitos
-Asegúrate de tener instalado:
-* Git
-* Node.js (v18+)
-* Docker Desktop (y que esté **corriendo**)
-* Un cliente SQL (Recomendado: DBeaver, pgAdmin, o `psql` CLI)
+## Capacidades en desarrollo o por fortalecer
 
-### 2. Clonar el Repositorio
+| Capacidad | Estado actual | Riesgo o siguiente acción |
+| --- | --- | --- |
+| Contratos de eventos RabbitMQ | Documentado inicial | Revisar [`docs/event-contracts.md`](./docs/event-contracts.md) y reforzar validación formal, versionado y compatibilidad si se requiere. |
+| Gobierno de APIs | Parcial | Definir política mínima de versionado, ownership y compatibilidad. |
+| BPM del proceso de tutoría | Documentado inicial | Revisar [`docs/bpm-tutoria-process.md`](./docs/bpm-tutoria-process.md) y completar evidencia si se requiere. |
+| Seguridad aplicada a APIs | Documentado inicial | Revisar [`docs/api-security-controls.md`](./docs/api-security-controls.md) y completar evidencias de controles. |
+| Auditoría técnica | Documentado inicial | Revisar [`docs/audit-compliance-matrix.md`](./docs/audit-compliance-matrix.md) y completar evidencia/retención. |
+| Runbook de observabilidad | Documentado inicial | Revisar [`docs/observability-runbook.md`](./docs/observability-runbook.md) y completar evidencias operativas. |
+| Despliegue fuera de Docker Compose | Parcial | Consolidar manifiestos, configuración y estrategia de operación. |
+| Demo final repetible | Parcial | Ejecutar checklist operativo y conservar evidencias verificables. |
+
+## Estado actual por bloques de interés
+
+| Bloque | Estado | Qué demuestra | Documentación relacionada |
+| --- | --- | --- | --- |
+| HTTP | Implementado | Servicios Express con rutas funcionales para autenticación, usuarios, agenda y tutorías. | [`docs/service-catalog.md`](./docs/service-catalog.md) |
+| Integración | Implementado/parcial | `ms-tutorias` orquesta llamadas a usuarios y agenda; hay manejo de errores controlados. | [`docs/service-catalog.md`](./docs/service-catalog.md) |
+| Contratos | Documentado mínimo | Cada servicio cuenta con OpenAPI base para rutas principales. | `ms-*/docs/swagger.yaml` |
+| Eventos | Documentado inicial | RabbitMQ soporta notificaciones y tracking; los contratos observados están documentados con alcance prudente. | [`docs/event-contracts.md`](./docs/event-contracts.md), [`docs/service-catalog.md`](./docs/service-catalog.md) |
+| BPM/proceso | Documentado inicial | La Saga modela el proceso principal y cuenta con flujo documentado. | [`docs/bpm-tutoria-process.md`](./docs/bpm-tutoria-process.md) |
+| Seguridad | Documentado inicial | JWT disponible para autenticación y autorización básica; controles y brechas documentados. | [`docs/api-security-controls.md`](./docs/api-security-controls.md), `ms-auth/docs/swagger.yaml`, `ms-tutorias/docs/swagger.yaml` |
+| Resiliencia | Implementado con validación documentada | Conflicto `409`, timeout, Circuit Breaker, DLQ y compensación de Saga. | [`docs/pc03.md`](./docs/pc03.md), [`docs/event-contracts.md`](./docs/event-contracts.md), [`docs/observability-runbook.md`](./docs/observability-runbook.md) |
+| Observabilidad | Documentado inicial | Correlation ID, tracking dashboard y métricas Prometheus/Grafana si están activos. | [`docs/observability-runbook.md`](./docs/observability-runbook.md) |
+| Gobierno | Parcial | Catálogo de servicios y brechas explícitas. | [`docs/service-catalog.md`](./docs/service-catalog.md) |
+| Auditoría | Documentado inicial | Hay trazabilidad operativa y matriz de auditoría/cumplimiento inicial. | [`docs/audit-compliance-matrix.md`](./docs/audit-compliance-matrix.md), [Plan de cierre de capacidades](./docs/unit3-closure-plan.md) |
+| Despliegue | Parcial | Docker Compose operativo; despliegue avanzado aún requiere consolidación. | [`docs/setup-and-usage.md`](./docs/setup-and-usage.md) |
+| Demo final | Parcial | La evidencia académica se consolida en la PC03; los detalles operativos viven en documentos especializados. | [`docs/pc03.md`](./docs/pc03.md), [`docs/setup-and-usage.md`](./docs/setup-and-usage.md), [`docs/observability-runbook.md`](./docs/observability-runbook.md) |
+
+## Arquitectura local
+
+El entorno local se levanta con Docker Compose e integra servicios de aplicación e infraestructura.
+
+### Servicios de aplicación
+
+| Servicio | Responsabilidad | Puerto local |
+| --- | --- | --- |
+| `client-mobile-sim` | Cliente web para simular solicitudes. | `8080` |
+| `tracking-dashboard` | Dashboard de trazabilidad en vivo. | `9000` |
+| `ms-auth` | Emisión de tokens JWT. | `4000` |
+| `ms-usuarios` | Consulta de estudiantes y tutores. | `3001` |
+| `ms-agenda` | Disponibilidad, bloqueo y liberación de agenda. | `3002` |
+| `ms-tutorias` | Orquestación de la solicitud de tutoría. | `3000` |
+| `ms-notificaciones` | Worker de notificaciones por RabbitMQ. | `3003` |
+
+### Infraestructura local
+
+| Componente | Uso | Puerto local |
+| --- | --- | --- |
+| `db-usuarios` | PostgreSQL de usuarios. | `5432` |
+| `db-agenda` | PostgreSQL de agenda. | `5433` |
+| `db-tutorias` | PostgreSQL de tutorías. | `5434` |
+| `rabbitmq` | Broker AMQP y panel de gestión. | `5672`, `15672` |
+| `toxiproxy` | Inyección controlada de fallas hacia `ms-usuarios`. | `8474`, `8001` |
+| `prometheus` | Recolección de métricas. | `9091` |
+| `grafana` | Visualización de métricas. | `3005` |
+
+## Puesta en marcha rápida
+
+> Para comandos completos, variables de entorno, scripts SQL y flujo de prueba paso a paso, usar [`docs/setup-and-usage.md`](./docs/setup-and-usage.md).
+
+### Prerrequisitos
+
+- Git.
+- Node.js 18+ para trabajo local fuera de contenedores.
+- Docker Desktop en ejecución.
+- Cliente SQL como DBeaver, pgAdmin o `psql`.
+
+### Levantar el entorno
+
 ```bash
-    git clone [URL-DE-TU-REPOSITORIO]
-    cd tutorias-universitarias-2
-```
-### 3. Configuración de Entorno (.env)
-El proyecto requiere archivos .env para cada servicio para desarrollo local. Ejecuta los siguientes 7 comandos desde la carpeta raíz del proyecto para crearlos a partir de las plantillas.
-
-**Nota:** Los valores de las plantillas (.env.example) están configurados para funcionar con los puertos locales expuestos por Docker Compose (ej. DB_PORT=5432, DB_PORT=5433, etc.).
-
-<details> <summary><strong>Haz clic aquí para ver los 7 comandos y el contenido de las plantillas</strong></summary>
-
-1. Comando para ms-auth:
-```bash
-    cp ms-auth/.env.example ms-auth/.env
-```
-Contenido de ms-auth/.env.example:
-
-```bash
-    PORT=4000
-    JWT_SECRET=ESTE_ES_UN_SECRETO_PARA_DESARROLLO_NO_USAR_EN_PROD
-    JWT_EXPIRES_IN=1h
-```
-2. Comando para ms-usuarios:
-```bash
-    cp ms-usuarios/.env.example ms-usuarios/.env
-```
-Contenido de ms-usuarios/.env.example:
-```bash
-    PORT=3001
-    LOG_LEVEL=info
-    SERVICE_NAME=MS_Usuarios
-    DB_HOST=localhost
-    DB_PORT=5432
-    DB_USER=user_usuarios
-    DB_PASSWORD=password_usuarios
-    DB_NAME=db_usuarios
-    RABBITMQ_URL=amqp://localhost:5672
-```
-3. Comando para ms-agenda:
-```bash
-    cp ms-agenda/.env.example ms-agenda/.env
-```
-Contenido de ms-agenda/.env.example (Corregido):
-```bash
-    PORT=3002
-    LOG_LEVEL=info
-    SERVICE_NAME=MS_Agenda
-    DB_HOST=localhost
-    DB_PORT=5433
-    DB_USER=user_agenda
-    DB_PASSWORD=password_agenda
-    DB_NAME=db_agenda
-    RABBITMQ_URL=amqp://localhost:5672
-```
-4. Comando para ms-tutorias:
-```bash
-cp ms-tutorias/.env.example ms-tutorias/.env
+docker-compose up --build
 ```
 
-Contenido de ms-tutorias/.env.example (Corregido):
-```bash
-    PORT=3000
-    LOG_LEVEL=info
-    SERVICE_NAME=MS_Tutorias
-    MS_USUARIOS_URL=http://localhost:3001/usuarios
-    MS_AGENDA_URL=http://localhost:3002/agenda
-    MS_NOTIFICACIONES_URL=http://localhost:3003/notificaciones
-    JWT_SECRET=ESTE_ES_UN_SECRETO_PARA_DESARROLLO_NO_USAR_EN_PROD
-    RABBITMQ_URL=amqp://localhost:5672
-    DB_HOST=localhost
-    DB_PORT=5434
-    DB_USER=user_tutorias
-    DB_PASSWORD=password_tutorias
-    DB_NAME=db_tutorias
-```
+Después de iniciar los contenedores, inicializar las tres bases de datos con los scripts de [`docs/setup-and-usage.md`](./docs/setup-and-usage.md#inicializar-bases-de-datos).
 
-5. Comando para ms-notificaciones:
-```bash
-    cp ms-notificaciones/.env.example ms-notificaciones/.env
-```
+### Verificar accesos principales
 
-Contenido de ms-notificaciones/.env.example:
-```bash
-    PORT=3003
-    LOG_LEVEL=info
-    SERVICE_NAME=MS_Notificaciones
-    RABBITMQ_URL=amqp://localhost:5672
-```
+| Recurso | URL | Uso |
+| --- | --- | --- |
+| Cliente web | <http://localhost:8080> | Ejecutar una solicitud de tutoría. |
+| Dashboard de tracking | <http://localhost:9000> | Observar eventos de la Saga. |
+| RabbitMQ Management | <http://localhost:15672> | Revisar colas, exchanges y DLQ. Usuario/clave local por defecto: `rabbit` / `rabbit`, sobreescribible por entorno. |
+| Prometheus | <http://localhost:9091> | Consultar métricas si el entorno local está activo. |
+| Grafana | <http://localhost:3005> | Visualizar métricas si se configura el dashboard. Clave local por defecto: `local-dev-admin`, sobreescribible por entorno. |
 
-6. Comando para client-mobile-sim:
-```bash
-    cp client-mobile-sim/.env.example client-mobile-sim/.env
-```
+### Flujo principal de prueba
 
-Contenido de client-mobile-sim/.env.example (Creado por nosotros):
-```bash
-    PORT=8080
-    API_BASE_URL=http://localhost:3000
-    AUTH_SERVICE_URL=http://localhost:4000/auth
+1. Abrir el cliente web y el dashboard de tracking.
+2. Solicitar un token desde el cliente o desde `POST http://localhost:4000/auth/token`.
+3. Enviar una solicitud de tutoría válida.
+4. Verificar respuesta `CONFIRMADA` y eventos correlacionados en el dashboard.
+5. Para pruebas de resiliencia, seguir la guía especializada antes de activar fallas inducidas.
 
-7. Comando para tracking-dashboard:
-```bash
-    cp tracking-dashboard/.env.example tracking-dashboard/.env
-```
+## Documentación especializada
 
-Contenido de tracking-dashboard/.env.example (Creado por nosotros):
-```bash
-    PORT=9000
-    RABBITMQ_URL=amqp://localhost:5672
-```
-</details>
+| Documento | Para qué usarlo |
+| --- | --- |
+| [`docs/setup-and-usage.md`](./docs/setup-and-usage.md) | Configuración local, SQL inicial y uso básico. |
+| [`docs/service-catalog.md`](./docs/service-catalog.md) | Responsabilidades, dependencias, ownership y contratos por servicio. |
+| [`docs/event-contracts.md`](./docs/event-contracts.md) | Contratos RabbitMQ observados, colas, exchanges, DLQ y payloads actuales. |
+| [`docs/bpm-tutoria-process.md`](./docs/bpm-tutoria-process.md) | Flujo del proceso de solicitud de tutoría y Saga orquestada. |
+| [`docs/api-security-controls.md`](./docs/api-security-controls.md) | Controles de seguridad API, evidencias disponibles y brechas. |
+| [`docs/observability-runbook.md`](./docs/observability-runbook.md) | Guía operativa para diagnosticar solicitudes, eventos, métricas y fallas. |
+| [`docs/audit-compliance-matrix.md`](./docs/audit-compliance-matrix.md) | Matriz inicial de auditoría, cumplimiento, evidencia y criterios de cierre. |
+| [`docs/pc03.md`](./docs/pc03.md) | Fuente canónica del enunciado PC03/APF3 y criterios académicos de evaluación. |
+| [Plan de cierre de capacidades](./docs/unit3-closure-plan.md) | Plan histórico de cierre técnico y brechas pendientes. |
+| `ms-*/docs/swagger.yaml` | Contratos OpenAPI mínimos por servicio. |
 
-### 4. Levantar el Ecosistema
-Este comando construirá las imágenes de Docker para los 7 servicios y levantará los 11 contenedores.
-```bash
-    docker-compose up --build
-```
-Espera a que los logs se estabilicen. Verás mensajes de "Conexión exitosa a PostgreSQL" y "Conectado a RabbitMQ" de los servicios.
+## Roadmap técnico
 
-### 5. (Paso Crítico) Inicializar las Bases de Datos
-Los contenedores de la base de datos están corriendo, pero están vacíos. Debes inicializar las tablas y datos de ejemplo manualmente.
-Abre tu cliente SQL (DBeaver, etc.) y ejecuta los siguientes 3 scripts:
-<details> <summary><strong>1. Conexión a db-usuarios (Puerto 5432)</strong></summary>
-* Host: localhost
-* Puerto: 5432
-* BD: db_usuarios
-* User: user_usuarios
-* Pass: password_usuarios
-
-**Script SQL** (de ms-usuarios/README.md):
-```bash
-    CREATE TABLE estudiantes (
-        id VARCHAR(50) PRIMARY KEY,
-        nombreCompleto VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        carrera VARCHAR(255)
-    );
-
-    CREATE TABLE tutores (
-        id VARCHAR(50) PRIMARY KEY,
-        nombreCompleto VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        especialidad VARCHAR(255)
-    );
-
-    INSERT INTO estudiantes (id, nombreCompleto, email, carrera) VALUES
-    ('e12345', 'Ana Torres', 'ana.torres@universidad.edu', 'Ingeniería de Software'),
-    ('e67890', 'Luis Garcia', 'luis.garcia@universidad.edu', 'Medicina');
-
-    INSERT INTO tutores (id, nombreCompleto, email, especialidad) VALUES
-    ('t54321', 'Dr. Carlos Rojas', 'carlos.rojas@universidad.edu', 'Bases de Datos Avanzadas'),
-    ('t09876', 'Dra. Elena Solano', 'elena.solano@universidad.edu', 'Cálculo Multivariable');
-```
-</details>
-
-<details> <summary><strong>2. Conexión a db-agenda (Puerto 5433)</strong></summary>
-    *Host: localhost
-    *Puerto: 5433
-    *BD: db_agenda
-    *User: user_agenda
-    *Pass: password_agenda
-
-**Script SQL** (de ms-agenda/README.md):
-```bash
-    CREATE TABLE bloqueos (
-        idBloqueo UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        idTutor VARCHAR(50) NOT NULL,
-        fechaInicio TIMESTAMPTZ NOT NULL,
-        duracionMinutos INTEGER NOT NULL,
-        idEstudiante VARCHAR(50) NOT NULL,
-        createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX idx_bloqueos_idTutor ON bloqueos(idTutor);
-
-    INSERT INTO bloqueos (idTutor, fechaInicio, duracionMinutos, idEstudiante) VALUES
-    ('t54321', '2025-10-22T10:00:00.000Z', 60, 'e12345');
-```
-</details>
-
-<details> <summary><strong>3. Conexión a db-tutorias (Puerto 5434)</strong></summary>
-    * Host: localhost
-    * Puerto: 5434
-    * BD: db_tutorias
-    * User: user_tutorias
-    * Pass: password_tutorias
-
-**Script SQL** (de ms-tutorias/README.md):
-```bash
-    CREATE TABLE tutorias (
-        idTutoria UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        idEstudiante VARCHAR(50) NOT NULL,
-        idTutor VARCHAR(50) NOT NULL,
-        materia VARCHAR(255),
-        fecha TIMESTAMPTZ NOT NULL,
-        estado VARCHAR(50) NOT NULL CHECK (estado IN ('PENDIENTE', 'CONFIRMADA', 'FALLIDA', 'CANCELADA')),
-        createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        updatedAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        error VARCHAR(500)
-    );
-
-    CREATE INDEX idx_tutorias_idEstudiante ON tutorias(idEstudiante);
-    CREATE INDEX idx_tutorias_idTutor ON tutorias(idTutor);
-    CREATE INDEX idx_tutorias_estado ON tutorias(estado);
-
-    CREATE OR REPLACE FUNCTION trigger_set_timestamp()
-    RETURNS TRIGGER AS $$
-    BEGIN
-    NEW.updatedAt = NOW();
-    RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-
-    CREATE TRIGGER set_timestamp
-    BEFORE UPDATE ON tutorias
-    FOR EACH ROW
-    EXECUTE PROCEDURE trigger_set_timestamp();
-```
-</details>
-
-### 6. ¡Sistema Listo! Verifica tu Entorno
-Tu ecosistema completo está en marcha. Abre las siguientes 3 URLs en tu navegador:
-1. **Cliente Web Interactivo:**
-    * http://localhost:8080
-    * Verás el formulario para solicitar tutorías.
-
-2. **Dashboard de Trazabilidad en Vivo:**
-    * http://localhost:9000
-    * Verás el dashboard con los carriles, listo para recibir eventos.
-
-3. **Panel de Administración de RabbitMQ:**
-    * http://localhost:15672
-    * Login: rabbit / rabbit
-    * Ve a la pestaña "Queues". Deberías ver notificaciones_email_queue con **1 consumidor**.
-
-### 7. Ejecuta una Prueba de Flujo Completo
-1. Coloca las ventanas del **Cliente (:8080)** y el **Dashboard (:9000)** una al lado de la otra.
-2. En el Cliente, usa los datos pre-rellenados (o cámbialos) y haz clic en **"Solicitar Tutoría"**.
-3. Observa cómo el Dashboard (:9000) se llena en tiempo real con los eventos de la saga, mostrando la comunicación entre MS_Tutorias, MS_Usuarios, MS_Agenda y MS_Notificaciones.
-4. Observa cómo el Cliente (:8080) recibe la respuesta JSON final de CONFIRMADA.
-
-## Hacia Dónde Apunta (Roadmap)
-El objetivo final de este proyecto es evolucionar de docker-compose a un despliegue completo en la nube:
-* **Orquestación de Contenedores:** Migrar a **Kubernetes (K8s)** para gestionar el despliegue, escalado y auto-reparación.
-* **Gestión de Infraestructura:** Desplegar PostgreSQL y RabbitMQ en K8s usando Helm charts.
-* **Gestión de Configuración:** Convertir las variables de entorno en **ConfigMaps y Secrets** de Kubernetes.
-* **API Gateway:** Integrar **Kong** como Ingress Controller en K8s para manejar el enrutamiento de tráfico externo y la seguridad JWT de forma centralizada.
+- Reforzar validación formal, versionado y compatibilidad de eventos RabbitMQ.
+- Completar gobierno de APIs y versionado.
+- Completar evidencias del proceso de solicitud de tutoría.
+- Completar evidencia, criterios y retención de auditoría técnica.
+- Consolidar evidencias del runbook de observabilidad y operación.
+- Preparar despliegue más allá de Docker Compose con configuración segura.

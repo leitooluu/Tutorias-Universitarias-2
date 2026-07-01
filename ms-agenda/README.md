@@ -37,7 +37,8 @@ CREATE TABLE bloqueos (
     fechaInicio TIMESTAMPTZ NOT NULL, -- TIMESTAMPTZ guarda la zona horaria (UTC recomendado)
     duracionMinutos INTEGER NOT NULL,
     idEstudiante VARCHAR(50) NOT NULL,
-    createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP -- Fecha de creación automática
+    createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, -- Fecha de creación automática
+    CONSTRAINT uq_bloqueos_tutor_fecha_inicio UNIQUE (idTutor, fechaInicio)
 );
 
 -- Opcional: Crear un índice para búsquedas rápidas por tutor
