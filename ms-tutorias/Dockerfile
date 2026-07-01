@@ -3,7 +3,7 @@
 # --- Etapa 1: Builder ---
 # Usamos una imagen de Node.js con el tag 'builder'. Esta etapa instalará
 # las dependencias y copiará el código.
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 # Establecemos el directorio de trabajo dentro del contenedor
 WORKDIR /usr/src/app
@@ -22,7 +22,7 @@ COPY . .
 # --- Etapa 2: Producción ---
 # Empezamos desde una imagen fresca y ligera de Node.js para mantener
 # nuestra imagen final pequeña y segura.
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /usr/src/app
 

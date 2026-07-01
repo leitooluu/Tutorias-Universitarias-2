@@ -28,6 +28,18 @@
 // ms-usuarios/src/infrastructure/repositories/usuarios.repository.js
 const db = require('../../config/db'); // Importa la configuración de la BD
 
+const buildUndefinedTableError = (err) => {
+    if (err.code !== '42P01') return err;
+
+    const relationMatch = err.message?.match(/relation "([^"]+)" does not exist/);
+    const tableName = err.table || relationMatch?.[1] || 'desconocida';
+    const error = new Error(`Base de datos de usuarios no inicializada: falta la tabla ${tableName}. Ejecuta el script SQL de inicialización.`);
+    error.statusCode = 500;
+    error.code = err.code;
+    error.cause = err;
+    return error;
+};
+
 const findEstudianteById = async (id) => {
     const queryText = 'SELECT * FROM estudiantes WHERE id = $1';
     try {
@@ -35,7 +47,7 @@ const findEstudianteById = async (id) => {
         return res.rows[0]; // Retorna la primera fila encontrada o undefined
     } catch (err) {
         console.error('Error ejecutando query findEstudianteById:', err.stack);
-        throw err; // Relanza el error para que lo maneje el servicio/controlador
+        throw buildUndefinedTableError(err); // Relanza el error para que lo maneje el servicio/controlador
     }
 };
 
@@ -46,7 +58,7 @@ const findTutorById = async (id) => {
         return res.rows[0];
     } catch (err) {
         console.error('Error ejecutando query findTutorById:', err.stack);
-        throw err;
+        throw buildUndefinedTableError(err);
     }
 };
 

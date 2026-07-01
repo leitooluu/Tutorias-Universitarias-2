@@ -15,9 +15,16 @@ const track = (cid, message, status = 'INFO') => {
     });
 };
 
-const solicitarTutoria = async (datosSolicitud, correlationId) => {
+const isDemoFaultInjectionEnabled = () => process.env.ENABLE_DEMO_FAULT_INJECTION === 'true';
+
+const shouldFailAfterBloqueo = (options = {}) => {
+    return isDemoFaultInjectionEnabled() && options.demoFailAfterBloqueo === true;
+};
+
+const solicitarTutoria = async (datosSolicitud, correlationId, options = {}) => {
     const { idEstudiante, idTutor, fechaSolicitada, duracionMinutos, materia } = datosSolicitud;
-    let nuevaTutoria; 
+    let nuevaTutoria;
+    let bloqueoRealizado = null;
 
     try {
         // --- 1. Validar usuarios ---
@@ -45,8 +52,18 @@ const solicitarTutoria = async (datosSolicitud, correlationId) => {
         // --- 4. Comandos de la Saga ---
         track(correlationId, 'Bloqueando horario en agenda...');
         const payloadAgenda = { fechaInicio: fechaSolicitada, duracionMinutos, idEstudiante };
-        await agendaClient.bloquearAgenda(idTutor, payloadAgenda, correlationId);
-        track(correlationId, 'Bloqueo de agenda exitoso.');
+        bloqueoRealizado = await agendaClient.bloquearAgenda(idTutor, payloadAgenda, correlationId);
+        const idBloqueo = bloqueoRealizado.idBloqueo || bloqueoRealizado.idbloqueo;
+        track(correlationId, `Bloqueo de agenda exitoso. ID: ${idBloqueo}`);
+
+        if (shouldFailAfterBloqueo(options)) {
+            track(correlationId, 'Fault injection demo activado después del bloqueo de agenda.', 'ERROR');
+            throw {
+                statusCode: 500,
+                message: 'Falla demo controlada después del bloqueo de agenda',
+                code: 'DEMO_FAULT_AFTER_BLOQUEO'
+            };
+        }
 
         track(correlationId, 'Publicando evento de notificación en RabbitMQ...');
         const payloadNotificacion = {
@@ -66,9 +83,29 @@ const solicitarTutoria = async (datosSolicitud, correlationId) => {
         return tutoriaConfirmada;
 
     } catch (error) {
+        const status = error.response?.status || error.statusCode || 500;
+
+        // Intentamos obtener el mensaje más específico posible
+        const msg = error.response?.data?.error?.message || error.message;
+
+        console.error(`[MS_Tutorias Service] - CID: ${correlationId} - Finalizando con error. Status: ${status}. Mensaje: ${msg}`);
+
+        track(correlationId, `Proceso fallido. Causa: ${msg}`, 'ERROR');
         // --- Compensación ---
         console.error(`[MS_Tutorias Service] - CID: ${correlationId} - ERROR CAPTURADO: ${error.message}`);
         track(correlationId, `ERROR: ${error.message}`, 'ERROR'); // <-- Publicar evento de error
+
+        const idBloqueo = bloqueoRealizado?.idBloqueo || bloqueoRealizado?.idbloqueo;
+        if (idBloqueo) {
+            track(correlationId, 'COMPENSACIÓN: Desbloqueando agenda...', 'ERROR');
+            try {
+                await agendaClient.cancelarBloqueo(idBloqueo, correlationId);
+                track(correlationId, 'Compensación (Agenda) exitosa.', 'ERROR');
+            } catch (compError) {
+                track(correlationId, `FALLÓ compensación de agenda: ${compError.message}`, 'ERROR');
+                // En producción: guardar en una cola de "reintentos pendientes" o alertar a un humano
+            }
+        }
 
         if (nuevaTutoria && nuevaTutoria.idtutoria) {
             track(correlationId, 'Iniciando compensación: Marcando tutoría como FALLIDA.', 'ERROR');
@@ -80,8 +117,8 @@ const solicitarTutoria = async (datosSolicitud, correlationId) => {
                 track(correlationId, `¡¡ERROR CRÍTICO EN COMPENSACIÓN!!: ${compensacionError.message}`, 'ERROR');
             }
         }
-        // Relanzar el error original
-        throw { statusCode: error.statusCode || 500, message: `No se pudo completar la solicitud: ${error.message}` };
+        // Relanzar el error manteniendo el contrato público existente.
+        throw { statusCode: status, message: `No se pudo completar la solicitud: ${msg}` };
     }
 };
 

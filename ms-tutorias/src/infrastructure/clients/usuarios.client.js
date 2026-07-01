@@ -1,42 +1,72 @@
 // ms-tutorias/src/infrastructure/clients/usuarios.client.js
 const axios = require('axios');
+const CircuitBreaker = require('opossum'); // 1. Importar Opossum
 const { usuariosServiceUrl } = require('../../config');
+const { publishTrackingEvent } = require('../messaging/message.producer'); // Para reportar al dashboard
 
-const getUsuario = async (tipo, id, correlationId) => {
-    // Construimos la URL
-    const url = `${usuariosServiceUrl}/${tipo}/${id}`;
+// 2. Configuración del Breaker
+const breakerOptions = {
+    timeout: 1500, // Si la petición tarda > 1.5s, se cancela (Timeout)
+    volumeThreshold: 2, // Con 2 fallos consecutivos ya hay volumen suficiente para abrir
+    errorThresholdPercentage: 50, // Si el 50% fallan, se abre el circuito
+    resetTimeout: 10000 // Espera 10s antes de intentar cerrar el circuito (Half-Open)
+};
 
-    // --- LOGS DE DEPURACIÓN ---
-    console.log(`[SUPER-DEBUG] Iniciando llamada a getUsuario con Correlation-ID: ${correlationId}`);
-    console.log(`[SUPER-DEBUG] URL de destino: ${url}`);
-    console.log(`[SUPER-DEBUG] Tipo: ${tipo}, ID: ${id}`);
-    // --- FIN LOGS DE DEPURACIÓN ---
-
+// Función que realiza la petición real
+const _makeRequest = async (url, correlationId) => {
     try {
         const response = await axios.get(url, {
-            headers: { 'X-Correlation-ID': correlationId }
+            headers: { 'X-Correlation-ID': correlationId },
+            timeout: 1500 // Timeout a nivel de red también
         });
-        console.log(`[SUPER-DEBUG] Éxito en la llamada a ${url}. Status: ${response.status}`);
         return response.data;
     } catch (error) {
-        // --- LOGS DE ERROR DETALLADOS ---
-        console.error(`[SUPER-DEBUG] FALLO en la llamada a ${url}.`);
-        if (error.response) {
-            // Este bloque se ejecuta si el servidor SÍ respondió, pero con un error (4xx, 5xx)
-            console.error(`[SUPER-DEBUG] El servidor respondió con Status: ${error.response.status}`);
-            console.error(`[SUPER-DEBUG] Data del error:`, JSON.stringify(error.response.data));
-            if (error.response.status === 404) {
-                return null;
-            }
-        } else if (error.request) {
-            // Este bloque se ejecuta si la petición se hizo pero NUNCA se recibió respuesta (error de red)
-            console.error('[SUPER-DEBUG] La petición fue enviada pero no se recibió respuesta. Error de red (timeout, DNS, etc).');
-        } else {
-            // Este bloque se ejecuta si hubo un error al configurar la petición antes de enviarla
-            console.error('[SUPER-DEBUG] Error fatal al configurar la petición axios:', error.message);
+        // Un usuario inexistente no debe contar como fallo de infraestructura para el breaker.
+        if (error.response && error.response.status === 404) return null;
+        throw error;
+    }
+};
+
+// 3. Crear el Circuit Breaker
+const breaker = new CircuitBreaker(_makeRequest, breakerOptions);
+
+// Reportar cambios de estado al Dashboard (Opcional pero genial para visibilidad)
+breaker.on('open', () => console.log('[CircuitBreaker] ABIERTO: ms-usuarios no responde.'));
+breaker.on('halfOpen', () => console.log('[CircuitBreaker] HALF-OPEN: Probando recuperación...'));
+breaker.on('close', () => console.log('[CircuitBreaker] CERRADO: ms-usuarios recuperado.'));
+
+const reportOpenCircuit = async (correlationId) => {
+    await publishTrackingEvent({
+        service: 'MS_Tutorias',
+        message: 'Circuit Breaker ABIERTO para ms-usuarios',
+        cid: correlationId,
+        timestamp: new Date(),
+        status: 'ERROR'
+    });
+};
+
+const isOpenCircuitError = (error) => breaker.opened || error.code === 'EOPENBREAKER';
+
+const getUsuario = async (tipo, id, correlationId) => {
+    const url = `${usuariosServiceUrl}/${tipo}/${id}`;
+
+    try {
+        // 4. Ejecutar a través del Breaker
+        const data = await breaker.fire(url, correlationId);
+        return data;
+    } catch (error) {
+        // Si el breaker está abierto, fallamos rápido con un error 503
+        if (isOpenCircuitError(error)) {
+            console.error(`[CircuitBreaker] Fallo rápido para ${url}`);
+            // Reportar evento crítico al dashboard
+            await reportOpenCircuit(correlationId);
+            throw {
+                statusCode: 503,
+                message: 'Servicio de usuarios no disponible temporalmente por timeout/red o Circuit Breaker abierto. Revisa la columna MS_Usuarios del dashboard para confirmar si la causa raíz es BD no inicializada, error interno o latencia.'
+            };
         }
-        console.error('[SUPER-DEBUG] Objeto de error completo de Axios:', error.code, error.message);
-        // --- FIN LOGS DE ERROR DETALLADOS ---
+
+        // Cualquier otro error
         throw error;
     }
 };

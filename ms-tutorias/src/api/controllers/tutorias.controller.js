@@ -21,10 +21,13 @@ const postSolicitud = async (req, res, next) => {
         };
         
         const correlationId = req.correlationId;
+        const demoFailAfterBloqueo = req.header('X-Demo-Fail-After-Bloqueo') === 'true';
 
         // 3. PASAR DATOS CONFIABLES AL SERVICIO
         // El servicio ahora recibirá un idEstudiante que sabemos que es auténtico.
-        const resultado = await tutoriaService.solicitarTutoria(datosConfiables, correlationId);
+        const resultado = await tutoriaService.solicitarTutoria(datosConfiables, correlationId, {
+            demoFailAfterBloqueo
+        });
         
         // =================== FIN DE CAMBIOS ===================
 

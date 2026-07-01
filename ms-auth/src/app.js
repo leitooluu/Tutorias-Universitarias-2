@@ -4,8 +4,22 @@ const express = require('express');
 const config = require('./config');
 const authRouter = require('./api/routes/auth.routes'); // Importa el enrutador
 const errorHandler = require('./api/middlewares/errorHandler');
+const promBundle = require("express-prom-bundle");
 
 const app = express();
+
+const metricsMiddleware = promBundle({
+    includeMethod: true,
+    includePath: true,
+    includeStatusCode: true,
+    includeUp: true,
+    customLabels: { project_name: 'tutorias_app', service_name: process.env.SERVICE_NAME || 'unknown_service' },
+    promClient: {
+        collectDefaultMetrics: {
+        }
+    }
+});
+app.use(metricsMiddleware);
 
 app.use(express.json());
 
@@ -15,6 +29,10 @@ app.use('/auth', authRouter);
 
 app.use(errorHandler);
 
-app.listen(config.port, () => {
-    console.log(`MS_Auth escuchando en el puerto ${config.port}`);
-});
+if (require.main === module) {
+    app.listen(config.port, () => {
+        console.log(`MS_Auth escuchando en el puerto ${config.port}`);
+    });
+}
+
+module.exports = app;

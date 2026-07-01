@@ -82,6 +82,6 @@ const enviarEmailNotificacion = async (payloadNotificacion) => {
 
 
 module.exports = {
-    //enviarNotificacion
+    enviarNotificacion,
     enviarEmailNotificacion
 };

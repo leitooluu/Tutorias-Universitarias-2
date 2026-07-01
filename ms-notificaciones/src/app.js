@@ -4,20 +4,32 @@ const config = require('./config');
 const notificacionesRouter = require('./api/routes/notificaciones.routes');
 const errorHandler = require('./api/middlewares/errorHandler'); // Reutilizamos el mismo middleware
 const correlationIdMiddleware = require('./api/middlewares/correlationId.middleware.js');
-const amqp = require('amqplib'); 
+const amqp = require('amqplib');
 const notificacionService = require('./domain/services/notificacion.service'); //  Importar el servicio de notificaciones
 const messageProducer = require('./infrastructure/messaging/message.producer'); // <-- IMPORTAR PRODUCTOR
+const promBundle = require("express-prom-bundle");
 
-const PORT = process.env.PORT || 3003;
+const RABBITMQ_RETRY_DELAY_MS = 5000;
 
 const app = express();
+
+const metricsMiddleware = promBundle({
+    includeMethod: true,
+    includePath: true,
+    includeStatusCode: true,
+    includeUp: true,
+    customLabels: { project_name: 'tutorias_app', service_name: process.env.SERVICE_NAME || 'unknown_service' },
+    promClient: {
+        collectDefaultMetrics: {
+        }
+    }
+});
+app.use(metricsMiddleware);
+
 app.use(express.json());
 app.use(correlationIdMiddleware); // Middleware para manejar el Correlation ID
 app.use('/notificaciones', notificacionesRouter);
 
-// Mantenemos la API (quizás para futuras rutas /status)
-// const notificacionesRouter = require('./api/routes/notificaciones.routes');
-// app.use('/notificaciones', notificacionesRouter); // <-- Comentamos esto, ya no recibimos POSTs
 app.use(errorHandler);
 
 // --- Lógica del Consumidor de RabbitMQ ---
@@ -28,13 +40,24 @@ const startConsumer = async () => {
         const channel = await connection.createChannel();
 
         const queueName = 'notificaciones_email_queue';
-        await channel.assertQueue(queueName, { durable: true });
+        const dlxName = 'notificaciones_dlx';
+        const dlqName = 'notificaciones_dlq';
+
+        await channel.assertExchange(dlxName, 'direct', { durable: true });
+        await channel.assertQueue(dlqName, { durable: true });
+        await channel.bindQueue(dlqName, dlxName, dlqName);
+        await channel.assertQueue(queueName, {
+            durable: true,
+            deadLetterExchange: dlxName,
+            deadLetterRoutingKey: dlqName
+        });
 
         // prefetch(1) asegura que el worker solo tome 1 mensaje a la vez.
         // No tomará el siguiente hasta que haga 'ack' (acuse) del actual.
-        channel.prefetch(1); 
+        channel.prefetch(1);
 
         console.log(`[MS_Notificaciones] Esperando mensajes en la cola: ${queueName}`);
+        console.log(`[MS_Notificaciones] DLQ configurada: ${queueName} -> ${dlxName} -> ${dlqName}`);
 
         channel.consume(queueName, async (msg) => {
             if (msg !== null) {
@@ -52,11 +75,12 @@ const startConsumer = async () => {
                     console.log(`[MS_Notificaciones] Mensaje procesado y confirmado (ack).`);
 
                 } catch (error) {
-                    console.error(`[MS_Notificaciones] Error al procesar mensaje: ${error.message}`, payload);
-                    // 4. Rechazar (nack) el mensaje. false = no volver a encolar (o true si quieres reintentar)
-                    // Podríamos moverlo a una cola de "dead-letter" (DLQ) en un futuro.
+                    const rawMessage = msg.content.toString();
+                    console.error(`[MS_Notificaciones] Error al procesar mensaje: ${error.message}`, payload || rawMessage);
+                    // 4. Rechazar (nack) el mensaje. false = no volver a encolar.
+                    // RabbitMQ lo enviará a la DLQ configurada en la cola principal.
                     channel.nack(msg, false, false);
-                    console.log(`[MS_Notificaciones] Mensaje rechazado (nack).`);
+                    console.log(`[MS_Notificaciones] Mensaje rechazado (nack) y enviado a DLQ: ${dlqName}.`);
                 }
             }
         }, {
@@ -65,17 +89,17 @@ const startConsumer = async () => {
 
     } catch (error) {
         console.error('[MS_Notificaciones] Error al conectar/consumir de RabbitMQ:', error.message);
-        setTimeout(startConsumer, 5000); // Reintentar conexión en 5 segundos
+        setTimeout(startConsumer, RABBITMQ_RETRY_DELAY_MS); // Reintentar conexión en 5 segundos
     }
 };
 
-// app.listen(PORT, () => {
-//     console.log(`MS_Notificaciones escuchando en el puerto ${PORT}`);
-// });
+if (require.main === module) {
+    // Iniciar el servidor y el consumidor de RabbitMQ
+    app.listen(config.port, () => {
+        console.log(`MS_Notificaciones (API) escuchando en el puerto ${config.port}`);
+        startConsumer();
+        messageProducer.connect(); // <-- INICIAR CONEXIÓN DEL PRODUCTOR
+    });
+}
 
-// Iniciar el servidor y el consumidor de RabbitMQ
-app.listen(config.port, () => {
-    console.log(`MS_Notificaciones (API) escuchando en el puerto ${config.port}`);
-    startConsumer();
-    messageProducer.connect(); // <-- INICIAR CONEXIÓN DEL PRODUCTOR
-});
+module.exports = app;

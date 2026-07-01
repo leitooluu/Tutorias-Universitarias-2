@@ -1,5 +1,4 @@
 # docker-compose.yml
-version: "3.8"
 
 services:
   # --- Servicio de Autenticación ---
@@ -9,7 +8,7 @@ services:
       - "4000:4000" # Mapea el puerto 4000 de tu máquina al 4000 del contenedor
     environment:
       - PORT=4000
-      - JWT_SECRET=ESTE_ES_UN_SECRETO_PARA_DESARROLLO_NO_USAR_EN_PROD
+      - JWT_SECRET=${JWT_SECRET:-local-dev-jwt-secret-change-me}
       - JWT_EXPIRES_IN=1h
 
   # --- Servicio de Usuarios ---
@@ -25,8 +24,9 @@ services:
       - DB_USER=user_usuarios
       - DB_PASSWORD=password_usuarios
       - DB_NAME=db_usuarios
-      - RABBITMQ_URL=amqp://rabbit:rabbit@rabbitmq:5672
-    depends_on: # Asegura que la BD inicie antes que el servicio
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-rabbit}:${RABBITMQ_DEFAULT_PASS:-rabbit}@rabbitmq:5672
+    depends_on:
+      # Asegura que la BD inicie antes que el servicio
       - db-usuarios
       - rabbitmq
 
@@ -43,8 +43,9 @@ services:
       - DB_USER=user_agenda
       - DB_PASSWORD=password_agenda
       - DB_NAME=db_agenda
-      - RABBITMQ_URL=amqp://rabbit:rabbit@rabbitmq:5672
-    depends_on: # Depende de su propia BD
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-rabbit}:${RABBITMQ_DEFAULT_PASS:-rabbit}@rabbitmq:5672
+    depends_on:
+      # Depende de su propia BD
       - db-agenda
       - rabbitmq
 
@@ -56,8 +57,8 @@ services:
       - "5672:5672" # Puerto AMQP para los servicios
       - "15672:15672" # Puerto para la interfaz web de gestión
     environment:
-      - RABBITMQ_DEFAULT_USER=rabbit # Usuario por defecto
-      - RABBITMQ_DEFAULT_PASS=rabbit # Contraseña por defecto
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-rabbit} # Usuario local por defecto
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-rabbit} # Contraseña local por defecto
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq/
 
@@ -68,9 +69,22 @@ services:
       - "3003:3003"
     environment:
       - PORT=3003
-      - RABBITMQ_URL=amqp://rabbit:rabbit@rabbitmq:5672 # URL de conexión a RabbitMQ
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-rabbit}:${RABBITMQ_DEFAULT_PASS:-rabbit}@rabbitmq:5672 # URL de conexión a RabbitMQ
     depends_on:
       - rabbitmq # Asegura que RabbitMQ inicie antes que este servicio
+
+  # --- Proxy para Chaos Engineering ---
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.5.0
+    container_name: toxiproxy
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    ports:
+      - "8474:8474" # API de control
+      - "8001:8001" # Puerto proxy para ms-usuarios
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json:ro
+    depends_on:
+      - ms-usuarios
 
   # --- Servicio de Tutorías (El Orquestador) ---
   ms-tutorias:
@@ -82,17 +96,19 @@ services:
       # --- CAMBIO CRÍTICO DE NETWORKING - Identificacion y Nombramiento de Servicios ---
       # Dentro de la red de Docker, los servicios se comunican usando su nombre de servicio,
       # no 'localhost'. Docker Compose se encarga de resolver estos nombres.
-      - MS_USUARIOS_URL=http://ms-usuarios:3001/usuarios
+      # Ruta por defecto para PC03 Mission 2: ms-tutorias -> Toxiproxy -> ms-usuarios.
+      # Para uso normal sin chaos, cambiar a: http://ms-usuarios:3001/usuarios
+      - MS_USUARIOS_URL=http://toxiproxy:8001/usuarios
       - MS_AGENDA_URL=http://ms-agenda:3002/agenda
       - MS_NOTIFICACIONES_URL=http://ms-notificaciones:3003/notificaciones
-      - JWT_SECRET=ESTE_ES_UN_SECRETO_PARA_DESARROLLO_NO_USAR_EN_PROD
+      - JWT_SECRET=${JWT_SECRET:-local-dev-jwt-secret-change-me}
       # --- VARIABLES DE LA BD PARA TUTORÍAS ---
       - DB_HOST=db-tutorias
       - DB_PORT=5432
       - DB_USER=user_tutorias
       - DB_PASSWORD=password_tutorias
       - DB_NAME=db_tutorias
-      - RABBITMQ_URL=amqp://rabbit:rabbit@rabbitmq:5672 # URL de conexión a RabbitMQ
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-rabbit}:${RABBITMQ_DEFAULT_PASS:-rabbit}@rabbitmq:5672 # URL de conexión a RabbitMQ
     depends_on:
       - ms-auth
       - ms-usuarios
@@ -100,6 +116,7 @@ services:
       - ms-notificaciones
       - db-tutorias
       - rabbitmq # Asegura que RabbitMQ inicie antes que este servicio
+      - toxiproxy # Permite enrutar ms-usuarios mediante el proxy de chaos
 
   # --- Cliente Web Interactivo ---
   client-sim:
@@ -124,7 +141,7 @@ services:
       - "9000:9000"
     environment:
       - PORT=9000
-      - RABBITMQ_URL=amqp://rabbit:rabbit@rabbitmq:5672
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-rabbit}:${RABBITMQ_DEFAULT_PASS:-rabbit}@rabbitmq:5672
     depends_on:
       - rabbitmq
 
@@ -164,6 +181,27 @@ services:
       - "5434:5432" # Se mapea el puerto 5434 en el host para evitar conflicto con db-usuarios (5432)
     volumes:
       - postgres_data_tutorias:/var/lib/postgresql/data
+
+  # --- MONITORIZACIÓN ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+    depends_on:
+      - ms-tutorias # Esperar a que al menos uno arranque
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3005:3000" # Mapeamos al 3005 para no chocar con ms-tutorias (3000)
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-local-dev-admin} # Contraseña inicial local
+    depends_on:
+      - prometheus
 
 # --- Definición de Volúmenes ---
 volumes:

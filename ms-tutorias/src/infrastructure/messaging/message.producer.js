@@ -5,11 +5,22 @@ const { rabbitmqUrl } = require('../../config');
 let connection = null;
 let channel = null;
 const EXCHANGE_NAME = 'tracking_events_exchange'; // Nombre del exchange de tracking
+const NOTIFICACIONES_QUEUE = 'notificaciones_email_queue';
+const NOTIFICACIONES_DLX = 'notificaciones_dlx';
+const NOTIFICACIONES_DLQ_ROUTING_KEY = 'notificaciones_dlq';
 
 const connect = async () => {
     try {
         connection = await amqp.connect(rabbitmqUrl);
         channel = await connection.createChannel();
+
+        connection.on('error', (error) => {
+            console.error('[MS_Tutorias] Error en conexión RabbitMQ:', error.message);
+        });
+
+        channel.on('error', (error) => {
+            console.error('[MS_Tutorias] Error en canal RabbitMQ:', error.message);
+        });
 
         // Asegurarse que el exchange de tracking exista
         await channel.assertExchange(EXCHANGE_NAME, 'fanout', { durable: true });
@@ -21,13 +32,21 @@ const connect = async () => {
     }
 };
 
-connect();
+// connect(); // Removed auto-connect to allow better control and testing
 
 // Función para publicar en una COLA (para notificaciones)
 const publishToQueue = async (queueName, messagePayload) => {
     if (!channel) { return; }
     try {
-        await channel.assertQueue(queueName, { durable: true });
+        const queueOptions = queueName === NOTIFICACIONES_QUEUE
+            ? {
+                durable: true,
+                deadLetterExchange: NOTIFICACIONES_DLX,
+                deadLetterRoutingKey: NOTIFICACIONES_DLQ_ROUTING_KEY
+            }
+            : { durable: true };
+
+        await channel.assertQueue(queueName, queueOptions);
         const messageBuffer = Buffer.from(JSON.stringify(messagePayload));
         channel.sendToQueue(queueName, messageBuffer, { persistent: true });
         console.log(`[MS_Tutorias] Mensaje publicado en la cola '${queueName}'`);
@@ -51,6 +70,7 @@ const publishTrackingEvent = async (payload) => {
 };
 
 module.exports = {
+    connect,
     publishToQueue,
     publishTrackingEvent // <-- Exportar la nueva función
 };

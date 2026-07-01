@@ -49,9 +49,18 @@ const crearBloqueo = async (idTutor, datosDelBody) => {
     const nuevoBloqueo = await agendaRepository.saveBloqueo(datosParaGuardar);
     return nuevoBloqueo;
 };
-// ===================================
+
+const compensarBloqueo = async (idBloqueo) => {
+    const eliminado = await agendaRepository.deleteBloqueoById(idBloqueo);
+    if (!eliminado) {
+        // Opcional: Si no existe, técnicamente la compensación "tuvo éxito" porque el estado final es el deseado
+        console.warn(`[AgendaService] Intento de compensar bloqueo ${idBloqueo} que no existía.`);
+    }
+    return { compensado: true };
+};
 
 module.exports = {
     verificarDisponibilidad,
-    crearBloqueo
+    crearBloqueo,
+    compensarBloqueo
 };
