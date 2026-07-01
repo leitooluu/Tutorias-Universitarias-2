@@ -79,13 +79,25 @@
             const color = getTransactionColor(evento.cid);
             bubble.style.borderColor = color;
 
-            bubble.innerHTML = `
-                <div>
-                    <span class="event-step">#${stepCounter}</span>
-                    <span class="event-message">${evento.message}</span>
-                </div>
-                <span class="event-cid">CID: ${evento.cid.substring(0, 13)}...</span>
-            `;
+            const content = document.createElement('div');
+
+            const step = document.createElement('span');
+            step.className = 'event-step';
+            step.textContent = `#${stepCounter}`;
+
+            const message = document.createElement('span');
+            message.className = 'event-message';
+            message.textContent = evento.message;
+
+            content.appendChild(step);
+            content.appendChild(message);
+
+            const cid = document.createElement('span');
+            cid.className = 'event-cid';
+            cid.textContent = `CID: ${String(evento.cid).substring(0, 13)}...`;
+
+            bubble.appendChild(content);
+            bubble.appendChild(cid);
 
             lane.appendChild(bubble);
             stepCounter++;
