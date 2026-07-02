@@ -65,8 +65,6 @@ Alternativas consideradas
   Alternativa B — Coreografía pura basada en eventos (descartada como modelo principal): Cada servicio reacciona a eventos de los demás sin un orquestador central. 
   Se descarta como enfoque principal porque, para un flujo de negocio con reglas de aprobación/cancelación relativamente lineales como este, la coreografía pura dificulta el diagnóstico ("¿quién decide qué?") y dispersa la lógica de negocio entre servicios. 
   Se conserva parcialmente para aspectos periféricos (notificaciones, auditoría).
-  Alternativa C — Mantener el diseño original con timeouts más largos (descartada): Aumentar el timeout HTTP para "esperar más" al proveedor no resuelve el problema de fondo: los proveedores pueden tardar más que cualquier timeout razonable para un cliente HTTP, y la transacción de BD seguiría bloqueada. 
-  Se descarta porque no resuelve el escenario de "pago aprobado después de que el cliente abandonó", que requiere manejo asíncrono por definición.
 
 Contratos:
 Eventos mínimos (ms-tutorias ⇄ ms-pagos):
