@@ -1,0 +1,129 @@
+Formato obligatorio de respuesta: mini RFC
+Contexto: El equipo desea incorporar la funcionalidad "Pago de Tutorias" al sistema existente. La tutoria solo puede avanzar si hay un pago válido y trazable.
+Servicios involucrados:
+ms-tutorias: dueño del dominio de tutorías, agenda y notificaciones.
+ms-pagos (nuevo): dueño de la relación con proveedores externos de pago.
+Proveedores externos (Visa, Mastercard): fuera de nuestro control, con latencia variable, rechazos, respuestas duplicadas, callbacks tardíos o ausencia de respuesta dentro del timeout esperado.
+Restricciones relevantes: el proveedor externo puede tardar segundos en responder o responder después de que el cliente/servicio ya abandonó la espera; 
+el sistema debe tolerar duplicados por doble clic, refresh o reintentos automáticos; debe existir trazabilidad extremo a extremo; 
+los datos sensibles de pago deben aislarse; y la demanda es variable (picos en inicio de semestre), por lo que el costo operativo debe ser razonable.
+
+Problema: 
+El diseño propuesto por el equipo ejecuta, dentro de una sola transacción de base de datos en ms-tutorias, una llamada HTTP síncrona a ms-pagos, 
+que a su vez llama síncronamente al proveedor externo y espera su respuesta final antes de continuar.
+Esto es riesgoso porque:
+1. Ata la duración de una transacción de base de datos local a la latencia de un sistema externo que no controlamos.
+2. Trata un problema inherentemente distribuido y asíncrono (pago con proveedor externo) como si fuera una operación local y síncrona.
+3. Asume que "todo ocurre en orden" es suficiente garantía de consistencia, cuando en realidad el orden temporal de la respuesta del proveedor 
+no está garantizado respecto al ciclo de vida de la solicitud en ms-tutorias.
+4. El argumento del equipo ("es simple porque todo ocurre en orden y ms-tutorias conserva el control") no resiste el análisis de los escenarios 
+de falla obligatorios del enunciado, detallados en la siguiente sección.
+
+Riesgos: 
+1. Tecnicos: 
+  1.1 Transacción larga con locks retenidos durante una llamada de red externa, degradando el throughput de agenda/tutorías para todos los usuarios concurrentes.
+  1.2 Timeout del cliente o del gateway antes que el proveedor responda: ms-tutorias revierte la transacción y reporta error, pero el proveedor puede aprobar el cobro segundos después → cobro sin tutoría reservada.
+  1.3 Reintentos del cliente (doble clic, refresh, retry automático) re-ejecutan todo el flujo sin idempotencia → cobros duplicados.
+  1.4 Respuestas duplicadas del proveedor o reentregas de callback, sin deduplicación, pueden aplicar el mismo pago dos veces en el lado de negocio.
+  1.5 Fallas parciales: agenda bloqueada pero pago no confirmado, o pago confirmado pero notificación nunca enviada, dejan al sistema en estados inconsistentes sin mecanismo de recuperación.
+  1.6 Falta de trazabilidad: sin correlation_id propagado, reconstruir un incidente de pago-tutoría desalineados es prácticamente imposible.
+
+2. De Negocio:
+  2.1 Disputas y contracargos por cobros sin servicio asociado, con impacto reputacional.
+  2.2 Soporte manual costoso para reconciliar pagos huérfanos.
+  2.3 Pérdida de disponibilidad de agenda: cupos bloqueados indefinidamente por solicitudes que nunca se resolvieron.
+
+3. De seguridad:
+  3.1 Si datos sensibles de pago transitan o se registran en ms-tutorias (logs, payloads), se amplía innecesariamente el alcance de cumplimiento (PCI-DSS) a un servicio que no debería manejarlos.
+
+4. Operacionales:
+  4.1 Sin circuit breaker, un proveedor degradado puede saturar hilos/conexiones de ms-tutorias y ms-pagos en cascada.
+
+Diseño propuesto:
+Arquitectura basada en saga (orquestación ligera en ms-tutorias + eventos asíncronos), separando el ciclo de vida de la tutoría del ciclo de vida del pago.
+1. Responsabilidades por servicio:
+  ms-tutorias: dueño de agenda y tutoría. Crea la intención de pago, bloquea agenda de forma tentativa (con TTL), y reacciona a eventos de resultado de pago para confirmar o compensar. Nunca maneja datos sensibles de pago, solo un payment_intent_id.
+  ms-pagos: dueño exclusivo de la comunicación con proveedores externos, tokenización, reintentos ante el proveedor y emisión de eventos de resultado.
+
+2. Notificaciones: se disparan de forma desacoplada al recibir eventos de estado final (confirmado/cancelado).
+
+3.Flujo principal:
+  Cliente solicita reservar y pagar una tutoría.
+  ms-tutorias, en una sola transacción local, crea la tutoría en estado PENDIENTE_PAGO, bloquea agenda tentativamente (con expiración) y escribe un evento PaymentIntentRequested en su tabla Outbox.
+  Un publicador de Outbox envía el evento a ms-pagos (mensajería asíncrona o llamada HTTP corta solo para registrar la intención, sin esperar el resultado final del proveedor).
+  ms-pagos interactúa con el proveedor externo (Visa/Mastercard) de forma asíncrona; el resultado llega por callback/webhook.
+  ms-pagos valida el callback, lo deduplica y publica PaymentAuthorized, PaymentDeclined o PaymentExpired.
+  ms-tutorias consume el evento vía Inbox (deduplicado), y: 
+  Si PaymentAuthorized y la reserva sigue vigente → confirma la tutoría.
+  Si PaymentAuthorized pero la reserva ya expiró/fue cancelada → dispara compensación (reembolso automático vía ms-pagos).
+  Si PaymentDeclined/PaymentExpired → libera la agenda y notifica al cliente.
+  Notificaciones se disparan por evento, no como paso bloqueante del flujo principal.
+
+Alternativas consideradas
+  Alternativa A — Orquestación asíncrona con Outbox/Inbox (elegida): ms-tutorias mantiene el control del flujo de negocio (como pedía el equipo original) pero sin bloquear una transacción de BD en espera de un tercero. 
+  Se acepta porque resuelve directamente los escenarios de falla obligatorios (timeouts, duplicados, pagos tardíos) con patrones estándar y trazabilidad clara.
+  Alternativa B — Coreografía pura basada en eventos (descartada como modelo principal): Cada servicio reacciona a eventos de los demás sin un orquestador central. 
+  Se descarta como enfoque principal porque, para un flujo de negocio con reglas de aprobación/cancelación relativamente lineales como este, la coreografía pura dificulta el diagnóstico ("¿quién decide qué?") y dispersa la lógica de negocio entre servicios. 
+  Se conserva parcialmente para aspectos periféricos (notificaciones, auditoría).
+  Alternativa C — Mantener el diseño original con timeouts más largos (descartada): Aumentar el timeout HTTP para "esperar más" al proveedor no resuelve el problema de fondo: los proveedores pueden tardar más que cualquier timeout razonable para un cliente HTTP, y la transacción de BD seguiría bloqueada. 
+  Se descarta porque no resuelve el escenario de "pago aprobado después de que el cliente abandonó", que requiere manejo asíncrono por definición.
+
+Contratos:
+Eventos mínimos (ms-tutorias ⇄ ms-pagos):
+Evento	                                    Emisor	                     Campos clave
+payment.intent.requested.v1	                ms-tutorias	                 correlation_id, idempotency_key, tutoria_id, monto, moneda, usuario_id
+payment.authorized.v1	                      ms-pagos	                   correlation_id, payment_intent_id, timestamp_proveedor
+payment.declined.v1	                        ms-pagos	                   correlation_id, payment_intent_id, motivo
+payment.expired.v1	                        ms-pagos	                   correlation_id, payment_intent_id
+schedule.held.v1 / schedule.released.v1	    ms-tutorias (interno)	       tutoria_id, ttl
+
+Errores que deben modelarse explícitamente (no como excepción genérica): 
+  PROVEEDOR_TIMEOUT, PROVEEDOR_RECHAZO, PAGO_DUPLICADO_DETECTADO, AGENDA_NO_DISPONIBLE, INTENCION_EXPIRADA.
+
+Versionamiento y compatibilidad:
+  Sufijo .v1, .v2 en el nombre del evento/endpoint.
+  Cambios aditivos (nuevos campos opcionales) no rompen consumidores existentes; los consumidores deben ignorar campos desconocidos.
+  Remover o renombrar campos requiere nueva versión y período de convivencia (dual-write/dual-read) antes de deprecar la anterior.
+
+Manejo de fallas:
+  Idempotencia: el cliente envía un idempotency_key; ms-tutorias lo usa para devolver la misma intención de pago ante doble clic/refresh/retry, sin crear una nueva. ms-pagos propaga esta clave al proveedor cuando este lo soporta.
+  Outbox en ms-tutorias: el evento payment.intent.requested se escribe en la misma transacción local que el cambio de estado de la tutoría, evitando el problema de "guardé en BD pero no publiqué el evento".
+  Inbox en ms-tutorias: los eventos de resultado de pago se deduplican por event_id/payment_intent_id antes de aplicar efectos, ya que pueden llegar duplicados (reentregas de broker o del proveedor).
+  Pagos tardíos: si el pago se aprueba después de que la reserva expiró o fue cancelada, se dispara una compensación (reembolso automático) en lugar de intentar revivir una reserva inexistente — patrón Saga con paso compensatorio explícito.
+  Reintentos: solo sobre operaciones idempotentes (ej. consulta de estado); nunca reintentar una autorización de cobro sin idempotency_key. Backoff exponencial con jitter.
+  Timeouts cortos en el paso síncrono inicial (registro de intención), nunca esperando el resultado final del proveedor de forma síncrona.
+  DLQ (Dead Letter Queue) para eventos que fallan repetidamente al procesarse (ej. callback malformado), con alerta y reproceso manual/automatizado.
+  TTL en el bloqueo de agenda: si no llega respuesta de pago dentro del plazo, la reserva se libera automáticamente.
+
+Observabilidad:
+  correlation_id único por solicitud de reserva/pago, propagado en headers HTTP y en el payload de todos los eventos, de extremo a extremo (cliente → ms-tutorias → ms-pagos → proveedor → callback → de vuelta).
+  Trazas distribuidas (ej. OpenTelemetry) para reconstruir la línea de tiempo completa de una solicitud a través de los tres servicios.
+  Logs estructurados con correlation_id, payment_intent_id y estado, sin incluir datos sensibles de pago.
+  Métricas clave: cantidad de intenciones de pago en estado PENDIENTE por más de X segundos, tasa de reembolsos por pago-tardío, latencia p95/p99 de respuesta del proveedor, tasa de eventos en DLQ.
+  Diagnóstico ante incidentes: con correlation_id y estados explícitos (PENDIENTE_PAGO, CONFIRMADA, CANCELADA_POR_TIMEOUT, CANCELADA_CON_REEMBOLSO) se puede reconstruir cualquier caso de soporte sin necesidad de acceso directo a los proveedores externos.
+
+Seguridad:
+  Datos sensibles de pago (PAN, CVV) nunca transitan ni se almacenan en ms-tutorias; idealmente van del cliente directo al proveedor o a ms-pagos vía tokenización (SDK/iframe del proveedor), minimizando el alcance PCI-DSS.
+  ms-tutorias solo conoce y persiste un payment_intent_id opaco.
+  Autenticación servicio-a-servicio: mTLS o tokens firmados (OAuth2 client credentials) entre ms-tutorias, ms-pagos y el bus de eventos.
+  Autorización: solo ms-tutorias, como orquestador autorizado, puede iniciar una intención de pago para un tutoria_id dado; ms-pagos valida esa autorización antes de proceder.
+  Callbacks/webhooks del proveedor: deben verificarse con firma criptográfica (HMAC) del proveedor, validar timestamp/nonce para evitar replay, y procesarse de forma idempotente (cubierto por el Inbox de la sección 7).
+
+Despliegue y costo:
+  ms-tutorias y ms-pagos: contenedores (Kubernetes/ECS/Cloud Run) con autoescalado horizontal por CPU/latencia de cola. Justificación: son los componentes con tráfico síncrono inicial (creación de intención) donde la latencia consistente importa.
+  Procesamiento de callbacks/eventos asíncronos (consumo de payment.authorized/declined/expired, aplicación de Inbox, disparo de notificaciones): candidatos ideales para serverless (Lambda/Cloud Functions), ya que el tráfico de pagos es en ráfagas (picos de matrícula) y el costo escala a cero en periodos bajos.
+  PaaS (ej. Cloud Run) es un punto intermedio razonable si se quiere evitar operar Kubernetes completo mientras se mantienen contenedores para los servicios principales.
+  Recomendación: contenedores con autoescalado para ms-tutorias/ms-pagos (consistencia de latencia), combinados con consumidores serverless para el procesamiento asíncrono de eventos/callbacks (costo proporcional a demanda real, sin sobreaprovisionar infraestructura fija durante los valles del semestre).
+
+Decisión: 
+  Se recomienda adoptar el diseño de la sección 4 (saga orquestada por ms-tutorias, con Outbox/Inbox, idempotencia end-to-end, reserva de agenda con TTL y separación estricta de datos sensibles en ms-pagos), en lugar del diseño original de transacción síncrona anidada.
+
+Riesgos residuales:
+  Ventana de tiempo entre PENDIENTE_PAGO y la resolución final del pago, durante la cual el cupo está "tentativamente" tomado (mitigado con TTL corto, pero no eliminado).
+  Complejidad operativa adicional (Outbox, Inbox, DLQ, eventos versionados) frente al diseño original, que requiere inversión inicial en infraestructura de mensajería y disciplina de equipo.
+  Dependencia de que el proveedor externo soporte idempotency_key; si no lo soporta nativamente, la deduplicación recae enteramente en ms-pagos.
+
+Condiciones para revisar esta decisión:
+  Si el volumen de solicitudes concurrentes es muy bajo y estable (sin picos), podría evaluarse simplificar la infraestructura de eventos.
+  Si el proveedor de pagos ofrece garantías síncronas fuertes de baja latencia (SLA verificado), podría reconsiderarse acortar la ventana de PENDIENTE_PAGO.
+  Revisar métricas de DLQ y tiempo en PENDIENTE_PAGO tras el primer trimestre en producción para ajustar TTLs y timeouts.
